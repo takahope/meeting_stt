@@ -107,12 +107,14 @@
 
 ### 3.7 Antigravity CLI 呼叫
 
-- 指令：`agy -p "<固定提示詞>" --print-timeout <T> [唯讀模式旗標] [--model <M>]`。**逐字稿經由 stdin 傳入**，不放在命令列參數（避免長度上限與 `ps` 外洩）。
+- 指令：`agy -p "<提示詞 + 逐字稿>" --print-timeout 5m [--model <M>]`，**逐字稿放在提示詞（命令列參數）中**，`stdin` 設為 `DEVNULL`。
+  - 2026-10-19 在 `agy` 1.4.2 實測：`agy -p` **不會把 stdin 當作提示詞內容**，agent 會嘗試用工具去讀它，被 headless 模式自動拒絕，結果是結束碼 0、stdout 為空；`--mode plan` 也無法改善，且會產出「實作計畫」檔而非摘要。詳見 `docs/notes/2026-10-19-agy-findings.md`。
+  - 取捨：逐字稿會出現在本機 `ps` 的命令列中（單人使用的 Mac 風險低）；提示詞超過 100,000 bytes（約 2 小時會議）時不呼叫 `agy`，明確報錯。
+  - `--print-timeout` 預設為不逾時，必須明確指定；`--model` 的值須為 `agy models` 列出的名稱。
 - Python 端逾時 = `--print-timeout` + 30 秒緩衝。
-- 判定失敗：找不到 `agy`、逾時、結束碼非 0、**stdout 去空白後為空**（已知 non-TTY 下 stdout 遺失但結束碼為 0 的問題）。
+- 判定失敗：找不到 `agy`、無法啟動、逾時、結束碼非 0、**stdout 去空白後為空**（agy 在工具權限被拒絕時仍回傳結束碼 0）、提示詞過長。
 - 寫入：先寫暫存檔，成功後原子更名為最終檔名。
 - 失敗時：保留 `.srt` 與逐字稿，不建立總結檔，於 stderr 印出原因與可直接貼上的重跑指令（`--summarize-only`）。
-- `--print-timeout` 的值格式、唯讀模式旗標、stdin 是否被讀取，須在 Mac 上以 `agy --help` 與實測確認後寫死；**若 `agy -p` 不讀 stdin，停止實作並回報**，重新決策。
 
 ## 4. 資料流
 
@@ -130,7 +132,7 @@
    ├─► <stem>.srt
    └─► <stem>_transcript.md
    │
-   ▼ 4. agy -p（逐字稿經 stdin；可用 --no-summary 跳過）
+   ▼ 4. agy -p（逐字稿放在提示詞中；可用 --no-summary 跳過）
    └─► <stem>_summary.md
 ```
 

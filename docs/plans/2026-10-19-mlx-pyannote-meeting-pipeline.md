@@ -6,11 +6,11 @@
 
 **Spec:** `docs/specs/2026-10-19-mlx-pyannote-meeting-pipeline-design.md`（所有數值與行為以 spec 為準；用語依 `GLOSSARY.md`）
 
-**Architecture:** 四階段序列管線。第 1 階段 FFmpeg 正規化為暫存 WAV；第 2 階段依序執行 mlx-whisper 與 pyannote，各自結束即釋放記憶體；第 3 階段以純函式對齊、切分並匯出；第 4 階段以 stdin 把逐字稿交給 `agy -p`。引擎模組延遲 import，所以除了 Task 0 與 Task 10，其餘都能在非 Mac 環境以 mock 開發與測試。
+**Architecture:** 四階段序列管線。第 1 階段 FFmpeg 正規化為暫存 WAV；第 2 階段依序執行 mlx-whisper 與 pyannote，各自結束即釋放記憶體；第 3 階段以純函式對齊、切分並匯出；第 4 階段把逐字稿放進提示詞交給 `agy -p`。引擎模組延遲 import，所以除了 Task 0 與 Task 10，其餘都能在非 Mac 環境以 mock 開發與測試。
 
 **Tech Stack:** Python 3.11+、`opencc-python-reimplemented`、`mlx` / `mlx-whisper`、`torch` + `pyannote.audio>=3.3,<4`、FFmpeg、Antigravity CLI（`agy`）、`pytest`。
 
-**驗證狀態：** Task 1–9 的測試與實作程式碼已在 Python 3.14 + pytest 上整套跑過：46 passed、1 skipped（Mac 冒煙測試）。實作時請原樣採用；若要偏離，先改測試。
+**驗證狀態：** Task 1–9 的測試與實作程式碼已在 Python 3.14 + pytest 上整套跑過：50 passed、1 skipped（Mac 冒煙測試）；`agy` 的呼叫方式另以真實 `agy` 1.4.2 端到端驗證過（見 `docs/notes/2026-10-19-agy-findings.md`）。實作時請原樣採用；若要偏離，先改測試。
 
 ## 模組地圖
 
@@ -72,20 +72,9 @@ python -c "import torch; from pyannote.audio import Pipeline; p = Pipeline.from_
 
 Expected：印出 `ok`（`use_auth_token=None` 會改用 `HF_TOKEN`／登入快取）。
 
-- [ ] **Step 4: 確認 `agy -p` 的旗標與 stdin 行為**
+- [x] **Step 4: 確認 `agy -p` 的旗標與 stdin 行為**（已在 WSL 以 agy 1.4.2 完成，記錄於 `docs/notes/2026-10-19-agy-findings.md`）
 
-```bash
-agy --version
-agy --help
-echo "會議逐字稿：王經理說週三前完成 OAuth。" | agy -p "請用一句話複述標準輸入的內容" --print-timeout 5m | cat
-```
-
-確認並記錄：
-1. `--print-timeout` 的值格式（如 `5m` 或 `300`），填入 `pipeline/summarizer.py` 的 `AGY_PRINT_TIMEOUT` 與 `AGY_PRINT_TIMEOUT_SEC`。
-2. 唯讀模式旗標（預設假設 `--mode plan`），填入 `AGY_READONLY_ARGS`；若不存在則設為 `()`。
-3. `| cat`（non-TTY）下 stdout 有內容，且內容反映了 stdin 的文字。
-
-**若 `agy -p` 不讀 stdin：停止，回報使用者重新決策（spec 3.7）**，不要自行改成把逐字稿放進命令列參數。
+結論：`agy -p` 不讀 stdin，逐字稿改放提示詞；`--mode plan` 不適用；`--print-timeout` 預設不逾時，須明確指定。在 Mac 上只需執行 `agy --version` 與 `agy models` 確認版本與模型名稱一致。
 
 - [ ] **Step 5: 寫下結果並 commit**
 
@@ -1275,22 +1264,32 @@ git commit -m "feat(exporters): add SRT and transcript exporters with display na
 - Create: `pipeline/summarizer.py`
 - Test: `tests/test_summarizer.py`
 
-檔首三個 `AGY_*` 常數以 Task 0 Step 4 的實測結果為準；若 Task 0 尚未完成，先用下列預設值，完成後回頭更新。
+agy 1.4.2 實測結論已反映在程式中：逐字稿放進提示詞（agy 不讀 stdin）、不使用 `--mode plan`、明確指定 `--print-timeout`、`stdin=DEVNULL`、過長時不呼叫。長會議的 5m 逾時是否足夠，待 Task 10 驗收時以實際長度確認。
 
 - [ ] **Step 1: 撰寫失敗測試 `tests/test_summarizer.py`**
 
 ```python
+import shlex
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from pipeline.summarizer import build_agy_command, build_agy_prompt, generate_meeting_summary
+from pipeline.summarizer import (
+    MAX_PROMPT_BYTES,
+    build_agy_command,
+    build_agy_prompt,
+    format_rerun_command,
+    generate_meeting_summary,
+)
+
+MODEL = "Gemini 3.8 Flash (High)"
 
 
-def test_build_agy_prompt_contains_required_sections():
-    prompt = build_agy_prompt()
+def test_build_agy_prompt_contains_required_sections_and_the_transcript():
+    prompt = build_agy_prompt("**[00:00:01,000 - 00:00:02,000] [SPEAKER_00]**\n逐字稿內容")
     for section in (
         "會議核心摘要",
         "關鍵決議事項 (Decisions)",
@@ -1298,29 +1297,46 @@ def test_build_agy_prompt_contains_required_sections():
         "負責人 (Owner)",
         "預計完成期限 (Deadline)",
         "來源時間戳記 (Timestamp)",
+        "逐字稿內容",
     ):
         assert section in prompt
+    assert "stdin" not in prompt and "標準輸入" not in prompt  # agy 不會讀 stdin
 
 
-def test_build_agy_command_has_timeout_and_optional_model():
-    cmd = build_agy_command("Gemini 3.7 Pro")
+def test_build_agy_command_has_timeout_and_optional_model_and_no_mode_flag():
+    cmd = build_agy_command("逐字稿內容", MODEL)
     assert cmd[:2] == ["agy", "-p"]
-    assert "--print-timeout" in cmd
-    assert cmd[-2:] == ["--model", "Gemini 3.7 Pro"]
-    assert "--model" not in build_agy_command()
+    assert "逐字稿內容" in cmd[2]
+    assert cmd[3] == "--print-timeout"
+    assert cmd[-2:] == ["--model", MODEL]
+    assert "--mode" not in cmd  # plan 模式會產出實作計畫檔而非摘要
+    assert "--dangerously-skip-permissions" not in cmd
+    assert "--model" not in build_agy_command("逐字稿內容")
 
 
-def test_generate_meeting_summary_sends_transcript_via_stdin_and_writes_atomically(tmp_path: Path):
+def test_format_rerun_command_is_pasteable_from_any_directory(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cmd = shlex.split(format_rerun_command(Path("output") / "weekly_transcript.md", MODEL))
+    assert cmd[0] == sys.executable  # 虛擬環境內的直譯器，否則缺少依賴
+    assert Path(cmd[1]).is_absolute() and Path(cmd[1]).name == "meeting_pipeline.py"
+    assert cmd[2] == "--summarize-only"
+    assert Path(cmd[3]) == tmp_path / "output" / "weekly_transcript.md"  # 絕對路徑
+    assert cmd[4:] == ["--agy-model", MODEL]
+
+
+def test_generate_meeting_summary_passes_transcript_in_argv_and_writes_atomically(tmp_path: Path):
     transcript = tmp_path / "meeting_transcript.md"
     transcript.write_text("逐字稿內容", encoding="utf-8")
     summary = tmp_path / "meeting_summary.md"
     with patch("pipeline.summarizer.subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout="# 會議總結\n重點一\n\n", stderr="")
-        ok = generate_meeting_summary(transcript, summary, agy_model="Gemini 3.7 Pro")
+        ok = generate_meeting_summary(transcript, summary, agy_model=MODEL)
     assert ok is True
     assert summary.read_text(encoding="utf-8") == "# 會議總結\n重點一\n"
-    assert mock_run.call_args.kwargs["input"] == "逐字稿內容"
-    assert "逐字稿內容" not in mock_run.call_args.args[0]
+    assert "逐字稿內容" in mock_run.call_args.args[0][2]
+    # agy 會嘗試讀 stdin，必須關掉，否則 headless 模式可能卡住或被拒絕
+    assert mock_run.call_args.kwargs["stdin"] == subprocess.DEVNULL
+    assert "input" not in mock_run.call_args.kwargs
     assert list(tmp_path.glob("*.tmp")) == []
 
 
@@ -1331,8 +1347,9 @@ def test_generate_meeting_summary_sends_transcript_via_stdin_and_writes_atomical
         {"return_value": MagicMock(returncode=0, stdout="  \n", stderr="")},
         {"side_effect": subprocess.TimeoutExpired(cmd="agy", timeout=330)},
         {"side_effect": FileNotFoundError("agy")},
+        {"side_effect": OSError(7, "Argument list too long")},
     ],
-    ids=["nonzero-exit", "empty-stdout", "timeout", "not-installed"],
+    ids=["nonzero-exit", "empty-stdout", "timeout", "not-installed", "argv-too-long"],
 )
 def test_generate_meeting_summary_failure_keeps_outputs_and_prints_rerun(tmp_path: Path, capsys, run_kwargs):
     srt = tmp_path / "meeting.srt"
@@ -1341,13 +1358,25 @@ def test_generate_meeting_summary_failure_keeps_outputs_and_prints_rerun(tmp_pat
     transcript.write_text("逐字稿內容", encoding="utf-8")
     summary = tmp_path / "meeting_summary.md"
     with patch("pipeline.summarizer.subprocess.run", **run_kwargs):
-        ok = generate_meeting_summary(transcript, summary, agy_model="Gemini 3.7 Pro")
+        ok = generate_meeting_summary(transcript, summary, agy_model=MODEL)
     assert ok is False
     assert srt.exists() and transcript.exists()
     assert not summary.exists()
     assert list(tmp_path.glob("*.tmp")) == []
     err = capsys.readouterr().err
-    assert "--summarize-only" in err and str(transcript) in err and "Gemini 3.7 Pro" in err
+    assert "--summarize-only" in err and str(transcript) in err and MODEL in err
+
+
+def test_generate_meeting_summary_rejects_oversized_transcript_without_calling_agy(tmp_path: Path, capsys):
+    transcript = tmp_path / "long_transcript.md"
+    transcript.write_text("字" * (MAX_PROMPT_BYTES // 3 + 1), encoding="utf-8")  # 每字 3 bytes
+    summary = tmp_path / "long_summary.md"
+    with patch("pipeline.summarizer.subprocess.run") as mock_run:
+        ok = generate_meeting_summary(transcript, summary)
+    assert ok is False
+    mock_run.assert_not_called()
+    assert not summary.exists()
+    assert "過長" in capsys.readouterr().err
 ```
 
 - [ ] **Step 2: 執行測試確認失敗**
@@ -1367,39 +1396,47 @@ import subprocess
 import sys
 from pathlib import Path
 
-# 以下三個常數依 Task 0 在 Mac 上 `agy --help` 的實測結果填寫
+# agy 1.4.2 實測（docs/notes/2026-10-19-agy-findings.md）：
+# - 預設不設逾時，必須明確指定 --print-timeout
+# - 不會把 stdin 當作提示詞內容，逐字稿只能放進提示詞（argv）
+# - --mode plan 會產出實作計畫檔而不是摘要，不使用
 AGY_PRINT_TIMEOUT = "5m"
 AGY_PRINT_TIMEOUT_SEC = 300
-AGY_READONLY_ARGS: tuple[str, ...] = ("--mode", "plan")
+
+# Linux 單一命令列參數上限為 128KiB；保留餘裕
+MAX_PROMPT_BYTES = 100_000
 
 _SUBPROCESS_GRACE_SEC = 30
 _CLI_PATH = Path(__file__).resolve().parents[1] / "meeting_pipeline.py"
 
 
-def build_agy_prompt() -> str:
+def build_agy_prompt(transcript_text: str) -> str:
     return (
-        "你是專業的會議記錄助理。標準輸入（stdin）是一份會議逐字稿，"
+        "你是專業的會議記錄助理。以下是一份會議逐字稿，"
         "每段以 **[開始 - 結束] [說話者]** 標示時間與說話者。"
-        "請只根據逐字稿內容，以繁體中文 Markdown 輸出以下三個章節，不要輸出其他前言或結語：\n\n"
+        "請只根據逐字稿內容，不要使用任何工具，以繁體中文 Markdown 輸出以下三個章節，不要輸出其他前言或結語：\n\n"
         "## 會議核心摘要\n3 至 5 點濃縮重點。\n\n"
         "## 關鍵決議事項 (Decisions)\n會議中拍板定案的結論；若無，寫「無」。\n\n"
         "## 待辦事項清單 (Action Items)\n"
         "以 Markdown 表格呈現，欄位依序為："
         "| 負責人 (Owner) | 待辦任務內容 (Task) | 預計完成期限 (Deadline) | 來源時間戳記 (Timestamp) |。\n"
         "負責人請寫逐字稿中的說話者，並依上下文在括號內推論其姓名或角色；"
-        "期限未提及時寫「未指定」；來源時間戳記必須是逐字稿中對應段落的開始時間。"
+        "期限未提及時寫「未指定」；來源時間戳記必須是逐字稿中對應段落的開始時間。\n\n"
+        "=== 逐字稿開始 ===\n"
+        f"{transcript_text}\n"
+        "=== 逐字稿結束 ==="
     )
 
 
-def build_agy_command(agy_model: str | None = None) -> list[str]:
-    cmd = ["agy", "-p", build_agy_prompt(), "--print-timeout", AGY_PRINT_TIMEOUT, *AGY_READONLY_ARGS]
+def build_agy_command(transcript_text: str, agy_model: str | None = None) -> list[str]:
+    cmd = ["agy", "-p", build_agy_prompt(transcript_text), "--print-timeout", AGY_PRINT_TIMEOUT]
     if agy_model:
         cmd += ["--model", agy_model]
     return cmd
 
 
 def format_rerun_command(transcript_path: Path, agy_model: str | None = None) -> str:
-    cmd = ["python3", str(_CLI_PATH), "--summarize-only", str(transcript_path)]
+    cmd = [sys.executable, str(_CLI_PATH), "--summarize-only", str(transcript_path.resolve())]
     if agy_model:
         cmd += ["--agy-model", agy_model]
     return shlex.join(cmd)
@@ -1409,10 +1446,18 @@ def generate_meeting_summary(
     transcript_path: Path, summary_path: Path, agy_model: str | None = None
 ) -> bool:
     transcript_text = transcript_path.read_text(encoding="utf-8")
+    cmd = build_agy_command(transcript_text, agy_model)
+    prompt_bytes = len(cmd[2].encode("utf-8"))
+    if prompt_bytes > MAX_PROMPT_BYTES:
+        return _fail(
+            f"逐字稿過長（提示詞 {prompt_bytes} bytes，上限 {MAX_PROMPT_BYTES}）；請將逐字稿分段後各別總結",
+            transcript_path,
+            agy_model,
+        )
     try:
         result = subprocess.run(
-            build_agy_command(agy_model),
-            input=transcript_text,
+            cmd,
+            stdin=subprocess.DEVNULL,  # agy 會嘗試讀 stdin；關掉以免被拒絕或卡住
             capture_output=True,
             text=True,
             timeout=AGY_PRINT_TIMEOUT_SEC + _SUBPROCESS_GRACE_SEC,
@@ -1421,15 +1466,20 @@ def generate_meeting_summary(
         return _fail("找不到 agy 執行檔，請確認 Antigravity CLI 已安裝並在 PATH 中", transcript_path, agy_model)
     except subprocess.TimeoutExpired:
         return _fail("agy 執行逾時", transcript_path, agy_model)
+    except OSError as exc:
+        return _fail(f"無法啟動 agy：{exc}", transcript_path, agy_model)
     if result.returncode != 0:
         return _fail(
-            f"agy 結束碼 {result.returncode}（可能未登入）：{(result.stderr or '').strip()}",
+            f"agy 結束碼 {result.returncode}（可能未登入或模型名稱無效）：{(result.stderr or '').strip()}",
             transcript_path,
             agy_model,
         )
     summary = (result.stdout or "").strip()
     if not summary:
-        return _fail("agy 沒有輸出任何內容", transcript_path, agy_model)
+        detail = (result.stderr or "").strip()
+        return _fail(
+            "agy 沒有輸出任何內容" + (f"：{detail}" if detail else ""), transcript_path, agy_model
+        )
     temp_path = summary_path.with_name(summary_path.name + ".tmp")
     temp_path.write_text(summary + "\n", encoding="utf-8")
     os.replace(temp_path, summary_path)
@@ -1450,13 +1500,13 @@ def _fail(reason: str, transcript_path: Path, agy_model: str | None) -> bool:
 
 Run: `pytest tests/test_summarizer.py -v`
 
-Expected: PASS（`7 passed`）
+Expected: PASS（`10 passed`）
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add tests/test_summarizer.py pipeline/summarizer.py
-git commit -m "feat(summarizer): call agy -p via stdin with timeout, empty-output and atomic-write handling"
+git commit -m "feat(summarizer): call agy -p with transcript in argv, timeout, empty-output and atomic-write handling"
 ```
 
 ---
@@ -1500,10 +1550,23 @@ FAKE_TURNS = [SpeakerTurn(start=1.0, end=3.0, speaker="SPEAKER_00")]
     ],
     ids=["num-with-min", "min-gt-max", "zero", "no-input", "both-inputs", "summarize-with-no-summary", "bad-speakers", "bad-ext"],
 )
-def test_parse_args_rejects_invalid_combinations(argv):
+def test_parse_args_rejects_invalid_combinations(argv, tmp_path: Path, monkeypatch):
+    (tmp_path / "demo.m4a").write_bytes(b"fake")  # 存在的錄音：確保被拒絕的原因是參數本身
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit) as exc:
         parse_args(argv)
     assert exc.value.code == 2
+
+
+def test_main_rejects_missing_recording_before_creating_anything(tmp_path: Path, capsys):
+    out_dir = tmp_path / "output"
+    with patch("meeting_pipeline.normalized_audio_wav") as mock_norm:
+        with pytest.raises(SystemExit) as exc:
+            main([str(tmp_path / "missing.m4a"), "--output-dir", str(out_dir)])
+    assert exc.value.code == 2
+    mock_norm.assert_not_called()
+    assert not out_dir.exists()
+    assert "找不到錄音" in capsys.readouterr().err
 
 
 def _run_main(argv: list[str], tmp_path: Path, summary_ok: bool = True):
@@ -1617,6 +1680,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     else:
         if args.audio_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
             parser.error(f"不支援的錄音格式：{args.audio_path.suffix}（支援 {', '.join(sorted(SUPPORTED_EXTENSIONS))}）")
+        if not args.audio_path.is_file():
+            parser.error(f"找不到錄音：{args.audio_path}")
     if args.num_speakers is not None and (args.min_speakers is not None or args.max_speakers is not None):
         parser.error("--num-speakers 不可與 --min-speakers/--max-speakers 併用")
     for value in (args.num_speakers, args.min_speakers, args.max_speakers):
@@ -1690,7 +1755,7 @@ if __name__ == "__main__":
 
 Run: `pytest tests/test_cli.py -v`
 
-Expected: PASS（`12 passed`）
+Expected: PASS（`13 passed`）
 
 - [ ] **Step 5: Commit**
 
@@ -1703,7 +1768,7 @@ git commit -m "feat(cli): wire up end-to-end meeting pipeline CLI with --summari
 
 Run: `pytest -v`
 
-Expected: `46 passed, 1 skipped`
+Expected: `50 passed, 1 skipped`
 
 ---
 
@@ -1760,7 +1825,7 @@ Expected: PASS（`1 passed`）。失敗時先對照 Task 0 的記錄檢查引擎
 
 - [ ] **Step 3: 撰寫 `README.md`**
 
-內容：安裝（`brew install ffmpeg`、`pip install -e ".[mac,dev]"`）、Hugging Face 兩個 gated 模型的授權步驟與 `HF_TOKEN`、`agy` 登入、CLI 範例（含 `--summarize-only`、`--no-summary`），以及隱私說明（spec 1.1、ADR 0001：一般會議預設上雲產生總結；機密會議請用 `--no-summary`，待日後加入 mlx-lm 地端總結）。
+內容：安裝（`brew install ffmpeg`、`pip install -e ".[mac,dev]"`）、Hugging Face 兩個 gated 模型的授權步驟與 `HF_TOKEN`、`agy` 登入、CLI 範例（含 `--summarize-only`、`--no-summary`），以及隱私說明（spec 1.1：逐字稿會送往線上模型；機構政策確認前，真實會議請用 `--no-summary`）。
 
 - [ ] **Step 4: 依 spec 第 7 節執行驗收**
 
