@@ -1,0 +1,17 @@
+# 會議內容（錄音與所有輸出物）一律不進版控
+output/
+*.m4a
+*.mp3
+*.mp4
+*.wav
+*.srt
+*_transcript.md
+*_summary.md
+*_summary_*.md
+*.tmp
+
+# Python
+__pycache__/
+.pytest_cache/
+.venv/
+*.egg-info/
