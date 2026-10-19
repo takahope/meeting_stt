@@ -35,6 +35,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     else:
         if args.audio_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
             parser.error(f"不支援的錄音格式：{args.audio_path.suffix}（支援 {', '.join(sorted(SUPPORTED_EXTENSIONS))}）")
+        if not args.audio_path.is_file():
+            parser.error(f"找不到錄音：{args.audio_path}")
     if args.num_speakers is not None and (args.min_speakers is not None or args.max_speakers is not None):
         parser.error("--num-speakers 不可與 --min-speakers/--max-speakers 併用")
     for value in (args.num_speakers, args.min_speakers, args.max_speakers):

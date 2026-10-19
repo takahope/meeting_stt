@@ -27,10 +27,23 @@ FAKE_TURNS = [SpeakerTurn(start=1.0, end=3.0, speaker="SPEAKER_00")]
     ],
     ids=["num-with-min", "min-gt-max", "zero", "no-input", "both-inputs", "summarize-with-no-summary", "bad-speakers", "bad-ext"],
 )
-def test_parse_args_rejects_invalid_combinations(argv):
+def test_parse_args_rejects_invalid_combinations(argv, tmp_path: Path, monkeypatch):
+    (tmp_path / "demo.m4a").write_bytes(b"fake")  # 存在的錄音：確保被拒絕的原因是參數本身
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit) as exc:
         parse_args(argv)
     assert exc.value.code == 2
+
+
+def test_main_rejects_missing_recording_before_creating_anything(tmp_path: Path, capsys):
+    out_dir = tmp_path / "output"
+    with patch("meeting_pipeline.normalized_audio_wav") as mock_norm:
+        with pytest.raises(SystemExit) as exc:
+            main([str(tmp_path / "missing.m4a"), "--output-dir", str(out_dir)])
+    assert exc.value.code == 2
+    mock_norm.assert_not_called()
+    assert not out_dir.exists()
+    assert "找不到錄音" in capsys.readouterr().err
 
 
 def _run_main(argv: list[str], tmp_path: Path, summary_ok: bool = True):
