@@ -4,7 +4,7 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** implemented（程式與測試已完成；mlx-whisper 參數名稱待 01 在 Mac 核對）
 
 **參考：** spec `docs/specs/2026-10-19-mlx-pyannote-meeting-pipeline-design.md`；用語依 `GLOSSARY.md`；已驗證的測試與實作在實作計畫 Task 2（轉繁）、4（語音辨識參數與幻覺黑名單）。
 

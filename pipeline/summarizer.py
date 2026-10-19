@@ -36,7 +36,7 @@ def build_agy_command(agy_model: str | None = None) -> list[str]:
 
 
 def format_rerun_command(transcript_path: Path, agy_model: str | None = None) -> str:
-    cmd = ["python3", str(_CLI_PATH), "--summarize-only", str(transcript_path)]
+    cmd = [sys.executable, str(_CLI_PATH), "--summarize-only", str(transcript_path.resolve())]
     if agy_model:
         cmd += ["--agy-model", agy_model]
     return shlex.join(cmd)

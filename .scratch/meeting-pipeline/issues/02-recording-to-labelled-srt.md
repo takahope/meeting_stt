@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 
 **參考：** spec `docs/specs/2026-10-19-mlx-pyannote-meeting-pipeline-design.md`；用語依 `GLOSSARY.md`；已驗證的測試與實作在實作計畫 Task 1、3、4（僅引擎呼叫與記憶體釋放）、5（對齊與「換人即切」）、7（SRT 匯出）、9（最小 CLI）。
 

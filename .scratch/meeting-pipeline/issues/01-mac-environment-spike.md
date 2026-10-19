@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-human
+**Status:** in-progress（agy 部分已在 WSL 實測，見 docs/notes/2026-10-19-agy-findings.md；mlx-whisper 與 pyannote 待 Mac）
 
 **參考：** spec `docs/specs/2026-10-19-mlx-pyannote-meeting-pipeline-design.md`；用語依 `GLOSSARY.md`；已驗證的測試與實作在實作計畫 Task 0。
 

@@ -1,10 +1,17 @@
+import shlex
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from pipeline.summarizer import build_agy_command, build_agy_prompt, generate_meeting_summary
+from pipeline.summarizer import (
+    build_agy_command,
+    build_agy_prompt,
+    format_rerun_command,
+    generate_meeting_summary,
+)
 
 
 def test_build_agy_prompt_contains_required_sections():
@@ -26,6 +33,16 @@ def test_build_agy_command_has_timeout_and_optional_model():
     assert "--print-timeout" in cmd
     assert cmd[-2:] == ["--model", "Gemini 3.7 Pro"]
     assert "--model" not in build_agy_command()
+
+
+def test_format_rerun_command_is_pasteable_from_any_directory(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cmd = shlex.split(format_rerun_command(Path("output") / "weekly_transcript.md", "Gemini 3.8 Flash (High)"))
+    assert cmd[0] == sys.executable  # 虛擬環境內的直譯器，否則缺少依賴
+    assert Path(cmd[1]).is_absolute() and Path(cmd[1]).name == "meeting_pipeline.py"
+    assert cmd[2] == "--summarize-only"
+    assert Path(cmd[3]) == tmp_path / "output" / "weekly_transcript.md"  # 絕對路徑
+    assert cmd[4:] == ["--agy-model", "Gemini 3.8 Flash (High)"]
 
 
 def test_generate_meeting_summary_sends_transcript_via_stdin_and_writes_atomically(tmp_path: Path):

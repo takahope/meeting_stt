@@ -4,7 +4,7 @@
 
 **Blocked by:** 01, 05, 07
 
-**Status:** ready-for-agent
+**Status:** blocked（stdin 傳逐字稿在 agy 1.4.2 不可行，等待重新決策；見 docs/notes/2026-10-19-agy-findings.md）
 
 **參考：** spec `docs/specs/2026-10-19-mlx-pyannote-meeting-pipeline-design.md`；用語依 `GLOSSARY.md`；已驗證的測試與實作在實作計畫 Task 8、9（`--no-summary` 與結束碼）。
 
