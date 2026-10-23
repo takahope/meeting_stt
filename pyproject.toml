@@ -9,7 +9,18 @@ requires-python = ">=3.11"
 dependencies = ["opencc-python-reimplemented>=0.1.7"]
 
 [project.optional-dependencies]
-mac = ["mlx>=0.20", "mlx-whisper>=0.4", "torch>=2.2", "pyannote.audio>=3.3,<4"]
+# pyannote.audio 3.x 的相容上限（2026-10-19 Mac 實測，docs/notes/2026-10-19-mac-environment-findings.md）：
+# torch 2.6 起 torch.load 預設 weights_only=True，載不了 pyannote 3.1 權重；
+# torchaudio 2.9 移除 AudioMetaData；huggingface_hub 1.0 移除 use_auth_token；speechbrain 1.1 要求 torch>=2.7
+mac = [
+    "mlx>=0.20",
+    "mlx-whisper>=0.4",
+    "torch>=2.2,<2.6",
+    "torchaudio>=2.2,<2.6",
+    "huggingface_hub<1.0",
+    "speechbrain<1.1",
+    "pyannote.audio>=3.3,<4",
+]
 dev = ["pytest>=8"]
 
 [tool.setuptools]

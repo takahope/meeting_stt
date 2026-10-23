@@ -1,7 +1,7 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from pipeline.asr import DEFAULT_ASR_MODEL, DEFAULT_INITIAL_PROMPT, transcribe_words
+from pipeline.asr import DEFAULT_ASR_MODEL, DEFAULT_INITIAL_PROMPT, extract_words, transcribe_words
 from pipeline.diarization import diarize_speakers
 from pipeline.hallucination import is_hallucination
 from pipeline.models import SpeakerTurn, WordToken
@@ -84,4 +84,33 @@ def test_diarize_speakers_uses_env_token_bounds_and_clears_cache(tmp_path: Path,
     assert turns == [
         SpeakerTurn(start=1.0, end=4.9, speaker="SPEAKER_00"),
         SpeakerTurn(start=5.0, end=8.5, speaker="SPEAKER_01"),
+    ]
+
+
+def test_extract_words_merges_english_subword_pieces_into_one_word():
+    # Mac 實測（mlx-whisper 0.4.3, language="zh"）：前導空白代表新的英文單字，沒有空白的是前一個字的延續
+    result = {
+        "segments": [
+            {
+                "text": "完成API文件 the OAuth login",
+                "words": [
+                    {"word": "完成", "start": 0.0, "end": 0.5},
+                    {"word": "AP", "start": 0.5, "end": 0.7},
+                    {"word": "I", "start": 0.7, "end": 0.9},
+                    {"word": "文", "start": 0.9, "end": 1.0},
+                    {"word": "the", "start": 1.0, "end": 1.2},
+                    {"word": " OA", "start": 1.2, "end": 1.4},
+                    {"word": "uth", "start": 1.4, "end": 1.6},
+                    {"word": " login", "start": 1.6, "end": 2.0},
+                ],
+            },
+        ]
+    }
+    assert extract_words(result) == [
+        WordToken(word="完成", start=0.0, end=0.5),
+        WordToken(word="API", start=0.5, end=0.9),
+        WordToken(word="文", start=0.9, end=1.0),
+        WordToken(word="the", start=1.0, end=1.2),
+        WordToken(word=" OAuth", start=1.2, end=1.6),
+        WordToken(word=" login", start=1.6, end=2.0),
     ]

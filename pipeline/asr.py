@@ -37,12 +37,24 @@ def extract_words(result: dict[str, Any]) -> list[WordToken]:
     for segment in result.get("segments", []):
         if is_hallucination(segment.get("text", "")):
             continue
+        previous: WordToken | None = None
         for raw in segment.get("words", []):
             text = to_traditional(raw["word"])
             if not text.strip():
+                previous = None
                 continue
-            words.append(WordToken(word=text, start=float(raw["start"]), end=float(raw["end"])))
+            if previous is not None and _continues_english_word(previous.word, text):
+                previous = WordToken(word=previous.word + text, start=previous.start, end=float(raw["end"]))
+                words[-1] = previous
+                continue
+            previous = WordToken(word=text, start=float(raw["start"]), end=float(raw["end"]))
+            words.append(previous)
     return words
+
+
+def _continues_english_word(previous: str, piece: str) -> bool:
+    # language="zh" 時英文會被拆成子詞（"AP" + "I"）；沒有前導空白的英數子詞接在英數結尾之後，屬於同一個英文單字
+    return previous[-1].isascii() and previous[-1].isalnum() and piece[0].isascii() and piece[0].isalnum()
 
 
 def _call_mlx_whisper(audio: str, **kwargs: Any) -> dict[str, Any]:
