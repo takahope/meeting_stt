@@ -20,5 +20,4 @@ meeting_pipeline.egg-info/
 docs/
 __pycache__/
 
-# md
-*.md
+
